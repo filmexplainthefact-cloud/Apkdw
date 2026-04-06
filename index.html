@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Synex</title>
+<title>Synex — Safe App Store</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
 
 <script type="module">
@@ -255,7 +255,6 @@ window.shareApp = async (a, ev) => {
 window.openAppModal = async (id) => {
   const a = allApps.find(x=>x.id===id);
   if(!a) return;
-  // Recently viewed
   recentlyViewed = [id, ...recentlyViewed.filter(x=>x!==id)].slice(0,10);
   localStorage.setItem("synex_recent", JSON.stringify(recentlyViewed));
 
@@ -272,7 +271,7 @@ window.openAppModal = async (id) => {
   document.getElementById("modalUpdated").textContent = a.updatedAt ? new Date(a.updatedAt).toLocaleDateString("en-IN") : "—";
   document.getElementById("modalMinAndroid").textContent = a.minAndroid||"5.0+";
   document.getElementById("modalChangelog").innerHTML = a.changelog
-    ? `<div class="changelog-box"><strong>What's New</strong><p>${a.changelog}</p></div>` : "";
+    ? `<div class="changelog-box"><strong>What's New 🆕</strong><p>${a.changelog}</p></div>` : "";
   const ss = a.screenshots ? Object.values(a.screenshots) : [];
   document.getElementById("modalScreenshots").innerHTML = ss.length
     ? `<div class="ss-scroll">${ss.map(s=>`<img src="${s}" class="ss-thumb" onclick="openLightbox('${s}')" onerror="this.style.display='none'">`).join("")}</div>` : "";
@@ -356,7 +355,6 @@ async function loadAdminStats(){
     if(snap.exists()) snap.forEach(c=>{ totalApps++; totalDl+=(c.val().downloads||0); });
     const sa=document.getElementById("statApps"); if(sa) sa.textContent=totalApps;
     const sd=document.getElementById("statDl"); if(sd) sd.textContent=fmtNum(totalDl);
-    // sync to stats modal
     const sa2=document.getElementById("statApps2"); if(sa2) sa2.textContent=totalApps;
     const sd2=document.getElementById("statDl2"); if(sd2) sd2.textContent=fmtNum(totalDl);
   });
@@ -368,13 +366,12 @@ async function loadAdminStats(){
 }
 
 // ══════════════════════════════════
-// FILE UPLOAD — FIX: no DOMContentLoaded wrapper needed
+// FILE UPLOAD — FIXED uploadFile
 // ══════════════════════════════════
 window.pickIcon = ()=> document.getElementById("iconInput").click();
 window.pickApk  = ()=> document.getElementById("apkInput").click();
 window.pickScreenshots = ()=> document.getElementById("ssInput").click();
 
-// Setup file listeners immediately (module scripts run after DOM is ready)
 function setupFileListeners(){
   const iconInput = document.getElementById("iconInput");
   const apkInput  = document.getElementById("apkInput");
@@ -399,6 +396,7 @@ function setupFileListeners(){
     const mb = (apkFile.size/1024/1024).toFixed(1);
     document.getElementById("apkPickBtn").textContent = "✅ "+apkFile.name.slice(0,22)+" ("+mb+"MB)";
     document.getElementById("formSize").value = mb;
+    toast("APK select ho gaya: "+apkFile.name.slice(0,20)+" ✅");
   });
 
   ssInput.addEventListener("change", e=>{
@@ -417,15 +415,41 @@ function setupFileListeners(){
 
 setupFileListeners();
 
-async function uploadFile(file, path, onProgress){
-  return new Promise((res,rej)=>{
-    const r = stRef(storage, path);
-    const task = uploadBytesResumable(r, file);
-    task.on("state_changed",
-      s=>{ onProgress && onProgress(Math.round(s.bytesTransferred/s.totalBytes*100)); },
-      rej,
-      async ()=>{ res(await getDownloadURL(task.snapshot.ref)); }
-    );
+// ══════════════════════════════════
+// FIXED uploadFile — proper error handling + retry
+// ══════════════════════════════════
+function uploadFile(file, path, onProgress){
+  return new Promise((resolve, reject)=>{
+    try {
+      const storageRef = stRef(storage, path);
+      const uploadTask = uploadBytesResumable(storageRef, file);
+
+      uploadTask.on(
+        "state_changed",
+        (snapshot)=>{
+          const pct = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+          if(onProgress) onProgress(pct);
+        },
+        (error)=>{
+          console.error("Upload error:", error.code, error.message);
+          let msg = "Upload fail ho gaya!";
+          if(error.code === "storage/unauthorized") msg = "Permission denied! Firebase Storage rules check karo.";
+          else if(error.code === "storage/canceled") msg = "Upload cancel ho gaya.";
+          else if(error.code === "storage/unknown") msg = "Network error — internet check karo.";
+          reject(new Error(msg + " (" + error.code + ")"));
+        },
+        async ()=>{
+          try {
+            const url = await getDownloadURL(uploadTask.snapshot.ref);
+            resolve(url);
+          } catch(e){
+            reject(e);
+          }
+        }
+      );
+    } catch(e){
+      reject(e);
+    }
   });
 }
 
@@ -476,14 +500,13 @@ function renderDrawer(){
     <div class="drawer-divider"></div>
     <button class="drawer-item" onclick="toggleTheme()">🌓 Theme Change Karo</button>
     <button class="drawer-item danger" onclick="logout()">🚪 Logout</button>
-    <div class="drawer-footer">Synex v2.0 — Safe Apps Direct Download</div>
+    <div class="drawer-footer">Synex v3.0 — Safe Apps Direct Download</div>
   `;
 }
 
 window.showRecent = () => {
   if(!recentlyViewed.length){ toast("Koi app abhi tak nahi dekhi!","err"); return; }
   const apps = allApps.filter(a=>recentlyViewed.includes(a.id));
-  const grid = document.getElementById("appGrid");
   renderApps(apps);
   document.getElementById("statsBar").textContent = `${apps.length} recently viewed`;
 };
@@ -562,82 +585,127 @@ function resetAdminForm(){
   document.getElementById("formFeatured").checked=false;
   document.getElementById("formIsNew").checked=false;
   document.getElementById("iconPreview").style.display="none";
+  document.getElementById("iconPreview").src="";
   document.getElementById("iconPickBtn").textContent="📷 Icon Choose Karo";
   document.getElementById("apkPickBtn").textContent="📦 APK File Choose Karo";
   document.getElementById("ssPickBtn").textContent="🖼️ Screenshots Choose Karo (max 5)";
   document.getElementById("ssPreviews").innerHTML="";
   document.getElementById("adminPanelTitle").textContent="Naya App Add Karo";
+  document.getElementById("iconInput").value="";
+  document.getElementById("apkInput").value="";
+  document.getElementById("ssInput").value="";
+  hideUploadProgress();
 }
 
 // ══════════════════════════════════
-// SAVE APP
+// SAVE APP — FIXED with detailed progress + error messages
 // ══════════════════════════════════
 window.saveApp = async () => {
   const name = document.getElementById("formName").value.trim();
   if(!name){ toast("App ka naam dalo!","err"); return; }
+  if(!editingId && !apkFile){ toast("APK file select karo pehle!","err"); return; }
+
   const btn = document.getElementById("saveBtn");
-  btn.disabled=true; btn.textContent="Uploading...";
-  showUploadProgress(0);
+  btn.disabled=true; btn.textContent="⏳ Uploading...";
+  showUploadProgress(2,"Shuru ho raha hai...");
 
   try{
     const id = editingId || push(dbRef(db,"apps")).key;
     let iconUrl="", apkUrl="";
     let currentData = {};
+
     if(editingId){
       const s = await get(dbRef(db,`apps/${editingId}`));
       if(s.exists()) currentData = s.val();
     }
+
+    // Upload icon
     if(iconFile){
-      showUploadProgress(10,"Icon upload ho raha hai...");
-      iconUrl = await uploadFile(iconFile,`icons/${id}/${Date.now()}_${iconFile.name}`,p=>showUploadProgress(10+p*0.3,"Icon uploading "+p+"%"));
-    } else { iconUrl=currentData.icon||""; }
+      showUploadProgress(5,"📷 Icon upload ho raha hai...");
+      iconUrl = await uploadFile(
+        iconFile,
+        `icons/${id}/${Date.now()}_${iconFile.name}`,
+        p => showUploadProgress(5 + p*0.25, `📷 Icon: ${p}%`)
+      );
+    } else {
+      iconUrl = currentData.icon || "";
+    }
+
+    // Upload APK
     if(apkFile){
-      showUploadProgress(40,"APK upload ho raha hai...");
-      apkUrl = await uploadFile(apkFile,`apks/${id}/${Date.now()}_${apkFile.name}`,p=>showUploadProgress(40+p*0.45,"APK uploading "+p+"%"));
-    } else { apkUrl=currentData.apkUrl||currentData.downloadUrl||""; }
-    if(!apkUrl){ toast("APK file zaroori hai!","err"); btn.disabled=false; btn.textContent="💾 Save Karo"; hideUploadProgress(); return; }
-    let screenshots=currentData.screenshots||{};
+      showUploadProgress(30,"📦 APK upload ho raha hai... (thoda time lagega)");
+      apkUrl = await uploadFile(
+        apkFile,
+        `apks/${id}/${Date.now()}_${apkFile.name}`,
+        p => showUploadProgress(30 + p*0.55, `📦 APK: ${p}% — ${((apkFile.size/1024/1024)*(p/100)).toFixed(1)}MB / ${(apkFile.size/1024/1024).toFixed(1)}MB`)
+      );
+    } else {
+      apkUrl = currentData.apkUrl || currentData.downloadUrl || "";
+    }
+
+    if(!apkUrl){
+      toast("APK file upload zaroori hai!","err");
+      btn.disabled=false; btn.textContent="💾 Save Karo";
+      hideUploadProgress(); return;
+    }
+
+    // Upload screenshots
+    let screenshots = currentData.screenshots || {};
     if(screenshotFiles.length){
-      showUploadProgress(85,"Screenshots upload ho rahe hain...");
-      screenshots={};
-      for(let i=0;i<screenshotFiles.length;i++){
-        const f=screenshotFiles[i];
-        screenshots[`ss${i}`]=await uploadFile(f,`screenshots/${id}/${i}_${Date.now()}_${f.name}`);
+      showUploadProgress(86,"🖼️ Screenshots upload ho rahe hain...");
+      screenshots = {};
+      for(let i=0; i<screenshotFiles.length; i++){
+        const f = screenshotFiles[i];
+        showUploadProgress(86 + (i/screenshotFiles.length)*8, `🖼️ Screenshot ${i+1}/${screenshotFiles.length}...`);
+        screenshots[`ss${i}`] = await uploadFile(f, `screenshots/${id}/${i}_${Date.now()}_${f.name}`);
       }
     }
-    showUploadProgress(95,"Database mein save ho raha hai...");
-    const data={
-      name, version:document.getElementById("formVersion").value.trim()||"1.0",
-      size:document.getElementById("formSize").value.trim()||"?",
-      category:document.getElementById("formCategory").value.trim()||"App",
-      developer:document.getElementById("formDeveloper").value.trim()||"Synex",
-      minAndroid:document.getElementById("formMinAndroid").value.trim()||"5.0",
-      description:document.getElementById("formDesc").value.trim(),
-      changelog:document.getElementById("formChangelog").value.trim(),
-      featured:document.getElementById("formFeatured").checked,
-      isNew:document.getElementById("formIsNew").checked,
-      icon:iconUrl, apkUrl, screenshots,
-      downloads:currentData.downloads||0,
-      avgRating:currentData.avgRating||0,
-      ratingCount:currentData.ratingCount||0,
-      updatedAt:Date.now(),
-      createdAt:currentData.createdAt||Date.now()
+
+    showUploadProgress(96,"💾 Database mein save ho raha hai...");
+
+    const data = {
+      name,
+      version: document.getElementById("formVersion").value.trim() || "1.0",
+      size: document.getElementById("formSize").value.trim() || "?",
+      category: document.getElementById("formCategory").value.trim() || "App",
+      developer: document.getElementById("formDeveloper").value.trim() || "Synex",
+      minAndroid: document.getElementById("formMinAndroid").value.trim() || "5.0",
+      description: document.getElementById("formDesc").value.trim(),
+      changelog: document.getElementById("formChangelog").value.trim(),
+      featured: document.getElementById("formFeatured").checked,
+      isNew: document.getElementById("formIsNew").checked,
+      icon: iconUrl, apkUrl, screenshots,
+      downloads: currentData.downloads || 0,
+      avgRating: currentData.avgRating || 0,
+      ratingCount: currentData.ratingCount || 0,
+      updatedAt: Date.now(),
+      createdAt: currentData.createdAt || Date.now()
     };
-    await set(dbRef(db,`apps/${id}`),data);
-    showUploadProgress(100,"Done! ✅");
-    setTimeout(()=>{ hideUploadProgress(); closeAdminPanel(); toast(editingId?"App update ho gaya! ✅":"Naya app add ho gaya! 🎉"); },600);
+
+    await set(dbRef(db,`apps/${id}`), data);
+    showUploadProgress(100,"✅ Done!");
+    toast(editingId ? "App update ho gaya! ✅" : "Naya app add ho gaya! 🎉");
+    setTimeout(()=>{ hideUploadProgress(); closeAdminPanel(); resetAdminForm(); }, 800);
+
   } catch(e){
-    toast("Error: "+e.message,"err"); console.error(e);
+    console.error("saveApp error:", e);
+    toast("❌ Error: " + e.message, "err");
+    hideUploadProgress();
   }
+
   btn.disabled=false; btn.textContent="💾 Save Karo";
 };
 
 function showUploadProgress(pct, label=""){
-  document.getElementById("uploadProgress").style.display="block";
-  document.getElementById("progressBar").style.width=pct+"%";
-  document.getElementById("progressLabel").textContent=label||pct+"%";
+  const prog = document.getElementById("uploadProgress");
+  prog.style.display="block";
+  document.getElementById("progressBar").style.width = Math.min(pct,100)+"%";
+  document.getElementById("progressLabel").textContent = label || Math.round(pct)+"%";
 }
-function hideUploadProgress(){ document.getElementById("uploadProgress").style.display="none"; }
+function hideUploadProgress(){
+  const prog = document.getElementById("uploadProgress");
+  if(prog) { prog.style.display="none"; document.getElementById("progressBar").style.width="0%"; }
+}
 
 // ══════════════════════════════════
 // DELETE
@@ -661,7 +729,6 @@ function renderNav(){
   } else {
     navRight.innerHTML=`<button class="nav-btn" onclick="loginWithGoogle()" style="background:linear-gradient(135deg,#7c6dfa,#a08cff);color:#fff">Login karo</button>`;
   }
-  // Admin fab
   const fab = document.getElementById("adminFab");
   if(fab) fab.style.display = isAdmin?"flex":"none";
 }
@@ -672,8 +739,51 @@ function renderNav(){
 window.toast = (msg,type="ok")=>{
   const t=document.getElementById("toast");
   t.textContent=msg; t.className="toast show"+(type==="err"?" err":"");
-  clearTimeout(t._t); t._t=setTimeout(()=>t.className="toast",3200);
+  clearTimeout(t._t); t._t=setTimeout(()=>t.className="toast",4000);
 };
+
+// ══════════════════════════════════
+// NEW: APP REPORT FEATURE
+// ══════════════════════════════════
+window.reportApp = async (id, ev) => {
+  if(ev) ev.stopPropagation();
+  if(!currentUser){ toast("Pehle login karo!","err"); return; }
+  const reason = prompt("Report karne ki wajah batao (optional):");
+  await push(dbRef(db,`reports/${id}`),{ uid:currentUser.uid, reason:reason||"No reason", time:Date.now() });
+  toast("Report submit ho gaya. Admin review karega. ✅");
+};
+
+// ══════════════════════════════════
+// NEW: SEARCH SUGGESTIONS
+// ══════════════════════════════════
+window.searchApps = () => {
+  activeCategory = "All";
+  buildCategoryTabs();
+  sortAndRender();
+  showSearchSuggestions();
+};
+
+function showSearchSuggestions(){
+  const q = document.getElementById("searchInput").value.toLowerCase();
+  const sug = document.getElementById("searchSuggestions");
+  if(!q || q.length < 2){ sug.style.display="none"; return; }
+  const matches = allApps.filter(a=>(a.name+a.category).toLowerCase().includes(q)).slice(0,5);
+  if(!matches.length){ sug.style.display="none"; return; }
+  sug.innerHTML = matches.map(a=>`
+    <div class="sug-item" onclick="openAppModal('${a.id}');document.getElementById('searchSuggestions').style.display='none'">
+      <img src="${a.icon||'https://placehold.co/28x28/1c1e38/9d96ff?text=A'}" onerror="this.src='https://placehold.co/28x28/1c1e38/9d96ff?text=A'">
+      <span>${a.name}</span>
+      <span class="sug-cat">${a.category||"App"}</span>
+    </div>
+  `).join("");
+  sug.style.display="block";
+}
+
+document.addEventListener("click", e=>{
+  const sug = document.getElementById("searchSuggestions");
+  if(sug && !sug.contains(e.target) && e.target.id !== "searchInput") sug.style.display="none";
+});
+
 </script>
 
 <style>
@@ -743,13 +853,22 @@ nav{position:sticky;top:0;z-index:200;display:flex;align-items:center;justify-co
 .hero h1{font-family:'Syne',sans-serif;font-size:clamp(1.8rem,5vw,3rem);font-weight:800;line-height:1.15;margin-bottom:10px;}
 .hero h1 .g{background:linear-gradient(120deg,#7c6dfa 20%,#fa6d8a 80%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
 .hero p{color:var(--muted);font-size:.95rem;margin-bottom:24px;}
-.search-wrap{display:flex;max-width:500px;margin:0 auto;
+.search-wrap{display:flex;max-width:500px;margin:0 auto;position:relative;
   background:var(--surface);border:1px solid var(--border);
-  border-radius:50px;overflow:hidden;box-shadow:var(--glow);}
+  border-radius:50px;overflow:visible;box-shadow:var(--glow);}
+.search-inner{display:flex;flex:1;overflow:hidden;border-radius:50px;}
 #searchInput{flex:1;padding:14px 22px;background:transparent;border:none;outline:none;
   color:var(--text);font-family:'DM Sans',sans-serif;font-size:.95rem;}
 #searchInput::placeholder{color:var(--muted);}
 .search-icon{padding:14px 20px;color:var(--accent);display:flex;align-items:center;}
+#searchSuggestions{position:absolute;top:calc(100% + 8px);left:0;right:0;
+  background:var(--surface);border:1px solid var(--border);border-radius:14px;
+  z-index:100;display:none;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.4);}
+.sug-item{display:flex;align-items:center;gap:10px;padding:10px 16px;cursor:pointer;transition:.15s;}
+.sug-item:hover{background:var(--surface2);}
+.sug-item img{width:28px;height:28px;border-radius:7px;object-fit:cover;}
+.sug-item span{font-size:.88rem;flex:1;}
+.sug-cat{font-size:.72rem!important;color:var(--muted)!important;flex:none!important;background:var(--surface2);padding:2px 8px;border-radius:20px;}
 
 /* ── CONTROLS ── */
 .controls{position:relative;z-index:1;padding:0 24px 16px;max-width:1200px;margin:0 auto;}
@@ -865,13 +984,14 @@ nav{position:sticky;top:0;z-index:200;display:flex;align-items:center;justify-co
 .ss-thumb:hover{transform:scale(1.04);}
 .modal-actions{display:flex;gap:8px;margin-top:20px;flex-wrap:wrap;}
 .modal-actions .dl-btn{flex:1;min-width:120px;}
-.edit-btn,.delete-btn,.share-btn,.copy-btn,.wish-modal-btn{padding:10px 14px;border-radius:10px;font-family:'DM Sans',sans-serif;
+.edit-btn,.delete-btn,.share-btn,.copy-btn,.wish-modal-btn,.report-btn{padding:10px 14px;border-radius:10px;font-family:'DM Sans',sans-serif;
   font-size:.82rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:5px;border:none;}
 .edit-btn{background:var(--surface2);color:var(--text);border:1px solid var(--border);display:none;}
 .delete-btn{background:rgba(250,80,80,.12);color:#ff7070;border:1px solid rgba(250,80,80,.2);display:none;}
 .share-btn{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
 .copy-btn{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
 .wish-modal-btn{background:rgba(250,80,80,.1);color:#ff7070;border:1px solid rgba(250,80,80,.2);}
+.report-btn{background:rgba(250,180,80,.08);color:#f59e0b;border:1px solid rgba(250,180,80,.2);}
 .modal-section-title{font-family:'Syne',sans-serif;font-weight:700;font-size:.9rem;
   color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:20px 0 10px;}
 #ratingSection{margin-top:16px;}
@@ -927,9 +1047,16 @@ nav{position:sticky;top:0;z-index:200;display:flex;align-items:center;justify-co
 .save-btn:hover{transform:translateY(-2px);}
 .save-btn:disabled{opacity:.6;transform:none;cursor:not-allowed;}
 #uploadProgress{display:none;margin:12px 0;background:var(--surface2);border-radius:12px;padding:14px;}
-#progressLabel{font-size:.82rem;color:var(--muted);margin-bottom:8px;display:block;}
-.progress-track{background:var(--surface3);border-radius:20px;height:8px;overflow:hidden;}
-#progressBar{height:100%;border-radius:20px;background:linear-gradient(90deg,#7c6dfa,#fa6d8a);transition:width .3s;width:0%;}
+#progressLabel{font-size:.82rem;color:var(--muted);margin-bottom:8px;display:block;word-break:break-all;}
+.progress-track{background:var(--surface3);border-radius:20px;height:10px;overflow:hidden;}
+#progressBar{height:100%;border-radius:20px;background:linear-gradient(90deg,#7c6dfa,#fa6d8a,#6dfabc);
+  transition:width .4s ease;width:0%;background-size:200% 100%;animation:progressShimmer 1.5s infinite linear;}
+@keyframes progressShimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+/* ── UPLOAD RULES HELPER ── */
+.upload-rules{background:rgba(250,180,80,.07);border:1px solid rgba(250,180,80,.2);
+  border-radius:10px;padding:12px;font-size:.78rem;color:#f59e0b;margin-bottom:14px;line-height:1.6;}
+.upload-rules strong{display:block;margin-bottom:4px;}
 
 /* ── ADMIN FAB ── */
 #adminFab{position:fixed;bottom:28px;right:24px;z-index:200;
@@ -964,7 +1091,7 @@ nav{position:sticky;top:0;z-index:200;display:flex;align-items:center;justify-co
   background:var(--surface2);color:var(--text);padding:13px 26px;border-radius:30px;
   font-size:.9rem;font-weight:600;border:1px solid var(--border);
   box-shadow:0 8px 30px rgba(0,0,0,.5);transition:transform .3s,opacity .3s;
-  opacity:0;z-index:800;pointer-events:none;white-space:nowrap;}
+  opacity:0;z-index:800;pointer-events:none;max-width:90vw;text-align:center;}
 .toast.show{transform:translateX(-50%) translateY(0);opacity:1;}
 .toast.err{border-color:rgba(250,80,80,.4);background:rgba(250,80,80,.14);color:#ff9090;}
 
@@ -1018,10 +1145,13 @@ footer .foot-logo{font-family:'Syne',sans-serif;font-weight:800;font-size:1.1rem
   <h1>Safe Apps, <span class="g">Direct Download</span></h1>
   <p>Trusted apps — koi warning nahi, koi tension nahi 🚀</p>
   <div class="search-wrap">
-    <input type="text" id="searchInput" placeholder="App, game ya tool dhundo..." oninput="searchApps()">
-    <div class="search-icon">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <div class="search-inner">
+      <input type="text" id="searchInput" placeholder="App, game ya tool dhundo..." oninput="searchApps()" autocomplete="off">
+      <div class="search-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      </div>
     </div>
+    <div id="searchSuggestions"></div>
   </div>
 </div>
 
@@ -1100,6 +1230,7 @@ footer .foot-logo{font-family:'Syne',sans-serif;font-weight:800;font-size:1.1rem
         <button class="share-btn" id="modalShareBtn">🔗 <span>Share</span></button>
         <button class="copy-btn" id="modalCopyBtn">📋 <span>Copy Link</span></button>
         <button class="wish-modal-btn" id="modalWishBtn">🤍 Wishlist</button>
+        <button class="report-btn" id="modalReportBtn">🚩 Report</button>
         <button class="edit-btn" id="modalEditBtn">✏️ Edit</button>
         <button class="delete-btn" id="modalDeleteBtn">🗑️ Delete</button>
       </div>
@@ -1132,6 +1263,14 @@ footer .foot-logo{font-family:'Syne',sans-serif;font-weight:800;font-size:1.1rem
       <span id="adminPanelTitle">Naya App Add Karo</span>
       <button class="panel-close" onclick="closeAdminPanel()">✕</button>
     </div>
+
+    <!-- Firebase Storage Rules reminder -->
+    <div class="upload-rules">
+      <strong>⚠️ Upload ke liye Firebase Storage Rules:</strong>
+      Firebase Console → Storage → Rules mein ye paste karo:<br>
+      <code>allow read, write: if request.auth != null;</code>
+    </div>
+
     <div class="form-group">
       <label>App Icon (Phone se upload karo)</label>
       <img id="iconPreview" src="" alt="icon preview">
@@ -1220,7 +1359,7 @@ footer .foot-logo{font-family:'Syne',sans-serif;font-weight:800;font-size:1.1rem
       <div class="stats-card"><div class="num" id="statUsers2">—</div><div class="lbl">Registered Users</div></div>
       <div class="stats-card"><div class="num">🔥</div><div class="lbl">Live Platform</div></div>
     </div>
-    <p style="font-size:.82rem;color:var(--muted);text-align:center">Synex — Admin Dashboard</p>
+    <p style="font-size:.82rem;color:var(--muted);text-align:center">Synex v3.0 — Admin Dashboard</p>
   </div>
 </div>
 
@@ -1232,6 +1371,14 @@ footer .foot-logo{font-family:'Syne',sans-serif;font-weight:800;font-size:1.1rem
 
 <!-- TOAST -->
 <div id="toast" class="toast"></div>
+
+<script>
+// Wire up report button after modal opens (non-module safe)
+document.getElementById("modalReportBtn").addEventListener("click", function(ev){
+  const appId = document.getElementById("appModal").dataset.appId;
+  if(appId) window.reportApp(appId, ev);
+});
+</script>
 
 </body>
 </html>
